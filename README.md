@@ -10,6 +10,8 @@ Various Shell script to test network stuff
 ### check_ipv6
 Script to check your IPv6 connection. handy to keep track if your IPv6 has changed and get alerted
 
+### check_ocsp
+Script to check if the given site has OCSP enabled
 
 #### IDEA:
  let me know your request 👻  and I *might* add it 😎

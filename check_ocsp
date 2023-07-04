@@ -1,0 +1,268 @@
+#!/usr/bin/env bash
+#
+# BSD 3-Clause License
+#
+# Copyright (c) 2023, © Badassops LLC / Luc Suryo
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# * Neither the name of the copyright holder nor the names of its
+#   contributors may be used to endorse or promote products derived from
+#   this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#*
+#* File		:	check_ocsp
+#*
+#* Description	: script to check if given site has OCSP support
+#*
+#* Author	:	Luc Suryo <luc@badassops.com>
+#*
+#* Version	:	0.1
+#*
+#* Date		:	Nov 16, 2013
+#*
+#* History	:
+#* 		Date:			Author:			Info:
+#*		Nov 16, 2013	LIS				First Release
+#*
+# https://www.digicert.com/help/
+
+_program="${0##*/}"
+_author='Luc Suryo'
+_copyright="Copyright 2013 - $(date "+%Y") (c) badassops LLC"
+_license='License BSD, http://www.freebsd.org/copyright/freebsd-license.html'
+_version='0.1'
+_email='luc@basassops.com'
+_summary='Script to check if given site has OCSP support'
+_cancelled='OK : Process has been cancelled on your request.'
+_info="$_program $_version\n$_copyright\n$_license\n\nWritten by $_author <$_email>\n$_summary\n"
+
+# defined return values
+_state_ok=0 ; _state_ok_msg='OK'
+_state_critical=2 ; _state_critical_msg='CRITICAL'
+
+# Whatever script needs to be run as root and exclusive lock
+_need_root=0
+_need_lock=1
+
+# color :)
+# Reset
+_color_off='\033[0m'		# Text Reset
+
+# Bold
+_color_black='\033[1;30m'	# Black
+_color_red='\033[1;31m'		# Red
+_color_green='\033[1;32m'	# Green
+_color_yellow='\033[1;33m'	# Yellow
+_color_blue='\033[1;34m'	# Blue
+_color_purple='\033[1;35m'	# Purple
+_color_cyan='\033[1;36m'	# Cyan
+_color_white='\033[1;37m'	# White
+
+# working variables
+_opid=$$
+_tmp_file=/tmp/$_opid
+_hostname="${HOSTNAME%%.*}"
+_echo_flag='-e'
+_echo_nflag='-ne'
+_my_site=
+_my_timeout=10
+_my_compression="false"
+_compression_flag=
+
+# commands used
+_curl_flags="-sk"
+
+# Set interrupt handler
+trap inthandler 1 2 3 4 5 9 10 12 15 23 24 25
+
+function inthandler() {
+	kill -TERM $_spid
+	clean_up
+	_print_it warning "$_cancelled"
+	exit $_state_ok
+}
+
+function clean_up() {
+	rm -f "$_tmp_file" > /dev/null 2>&1
+	return 0
+}
+
+function counter() {
+	local delay=0.75
+	local spincnt=$1
+	_checkMark="\e[0;32m\xE2\x9C\x94\e[0m"
+	while [ 1 ]; do
+		printf "\e[s"
+		printf "  \e[1;35m[%s]${_checkMark}" "$spincnt"
+		sleep $delay
+		let spincnt--
+		if (( $spincnt < 0 )) ; then
+			break
+		fi
+		printf "\e[u\e[0K"
+	done
+	printf "\e[u\e[0K"
+}
+
+function _print_it() {
+	local _info_mode=$1
+	shift
+	case $_info_mode
+	in
+		# argument given none color
+		ok)			printf "${_color_green}%s${_color_off}\n" "$*" 2>&1 ;;
+		warning)	printf "${_color_yellow}%s${_color_off}\n" "$*" 2>&1 ;;
+		error)		printf "${_color_red}%s${_color_off}\n" "$*" 2>&1 ;;
+		Help)		printf "${_color_yellow}" ; echo -e "$*" ; printf "${_color_off}" 2>&1 ;;
+		help)		printf "${_color_cyan}" ; echo -e "$*" ; printf "${_color_off}" 2>&1 ;;
+		ignore)		printf "${_color_purple}" ; echo -e "$*" ; printf "${_color_off}" 2>&1 ;;
+		# no new line and no color
+		entry)		echo -en "$*" 2>&1 ;;
+		# reset screen
+		reset)		printf "${_color_off}\n" 2>&1 ;;
+		# default
+		*)			printf "${_color_cyan}" ; echo -e "$*" ; printf "${_color_off}" 2>&1 ;;
+	esac
+	return 0
+}
+
+function help() {
+	trap 1 2 3 4 5 9 10 12 15 23 24 25
+	_print_it Help "$_info"
+	_print_it help "Usage : $_program [-h]  [ option ... ]"
+	_print_it help " Options:"
+	_print_it help "   -h                this help page."
+	_print_it help "  --site sitename    Specify the site to check."
+	_print_it help "  --timeout seconds  Specify the timeout. Default: ${_my_timeout:-no default}" 
+	_print_it help "  --zip              request compression; default: ${_my_compression:-no default}."
+	_print_it help "   -v                Show version."
+	exit $1
+}
+
+function create_info_file() {
+	echo "\\n    time_namelookup:  %{time_namelookup}\\n"     	> $_tmp_file
+	echo "       time_connect:  %{time_connect}\\n"         	>> $_tmp_file
+	echo "    time_appconnect:  %{time_appconnect}\\n"      	>> $_tmp_file
+	echo "   time_pretransfer:  %{time_pretransfer}\\n"     	>> $_tmp_file
+	echo "      time_redirect:  %{time_redirect}\\n"        	>> $_tmp_file
+	echo " time_starttransfer:  %{time_starttransfer}\\n"   	>> $_tmp_file
+	echo "                    ----------\\n"                	>> $_tmp_file
+	echo "         time_total:  %{time_total} return code %{http_code}\\n"	>> $_tmp_file
+	echo "      url_effective:  %{url_effective} speed_download: %{speed_download}\\n" >>  $_tmp_file
+	echo "      num_connects:   %{num_connects}  num_redirects: %{num_redirects}\\n" >>  $_tmp_file
+	echo "     download size:   %{size_download}\\n" >>  $_tmp_file
+	return $?
+}
+
+function get_given_options() {
+	local _option_site=0 ;
+	local _option_timeout=0
+	local _option_compression=0
+	local _has_error=0
+	while [[ -n "$1" ]]
+	do
+		case "$1" in
+			 '--site'|'-s')		_my_site="$2"
+								shift ; let _option_site++ ;;
+
+			 '--timeout'|'-t')	_my_timeout="$2"
+								shift ; let _option_timeout++ ;;
+
+			'--zip'|'-z')		_compression_flag="--compressed"
+								let _option_compression++ 
+								_my_compression="true" ;;
+
+			'--version'|'-v')	echo $_echo_flag "$_version" ; exit $_state_ok ; ;;
+			*)		help 0 ;; 	# Which includes -h and --help
+		esac
+		shift
+	done
+
+	(( $_option_site != 1 )) && _print_it error "-s is missing or given more then once." && let _has_error++
+	(( $_option_timeout > 1 )) && _print_it error "-t can only be given once." && let _has_error++
+	(( $_option_compression > 1 )) && _print_it error "-z can only be given once." && let _has_error++
+	(( $_has_error != 0 )) && help $_has_error
+	return 0
+}
+
+function get_site_info(){
+	local _result=0
+	create_info_file
+	(( $? != $_state_ok )) && return 1
+
+	curl $_curl_flags https://$_my_site --connect-timeout $_my_timeout $_compression_flag -o /dev/null 2>&1
+	if (( $? != 0 )) ; then
+		_print_it error "* site $_my_site does not exist or is not reachable, aborting... *"
+		return 255
+	fi
+
+	_print_it info "$_my_site : https connection INFO"
+	curl $_curl_flags --connect-timeout $_my_timeout $_compression_flag -w "@$_tmp_file" \
+		https://$_my_site \
+		-o /dev/null 2>&1
+	_result=$?
+	_print_it info "\t---\n\n"
+	return $_result
+}
+
+function get_site_ocsp() {
+	local _result=0
+	_print_it info "$_my_site : OCSP INFO"
+	echo QUIT | openssl s_client -connect ${_my_site}:443 -status 2>/dev/null | grep -A12 'OCSP Response Data:'
+	_result=$?
+	if (( $_result != 0 )) ; then
+		# lets try to grep for OCSP in case thing has changed
+		echo QUIT | openssl s_client -connect ${_my_site}:443 -status 2>/dev/null | grep 'OCSP response: no response sent'
+		if (( $? == 0 )) ; then
+			_print_it warning "Site ${_my_site} does seem to support OCSP"
+			local _result=255
+		fi
+	fi
+	_print_it info "\t---\n\n"
+	return $_result
+}
+
+function main() {
+	local _var_exit=$_state_ok
+	get_given_options $@
+	_print_it info "---" "$(date) Process starting"
+	get_site_info
+	_var_exit=$?
+	if (( $_var_exit == 0 )); then
+		get_site_ocsp
+		_var_exit=$?
+	fi
+
+	case $_var_exit
+	in
+		0)	_print_it info "Process completed, result == $_var_exit"
+			_print_it ok "---" "$(date) $_program $_state_ok_msg : succesful" ;;
+
+		*)	_print_it info "Process completed, result == $_var_exit"
+			_print_it error "---" "$(date) $_program $_state_critical_msg : has failed" ;;
+	esac
+	clean_up
+	trap 1 2 3 4 5 9 10 12 15 23 24 25
+	exit $_var_exit
+}
+main "$@"
