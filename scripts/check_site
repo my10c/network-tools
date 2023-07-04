@@ -1,0 +1,383 @@
+#!/usr/bin/env bash
+#
+# BSD 3-Clause License
+#
+# Copyright (c) 2016 - 2023, © Badassops LLC / Luc Suryo
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# * Redistributions of source code must retain the above copyright notice, this
+#   list of conditions and the following disclaimer.
+#
+# * Redistributions in binary form must reproduce the above copyright notice,
+#   this list of conditions and the following disclaimer in the documentation
+#   and/or other materials provided with the distribution.
+#
+# * Neither the name of the copyright holder nor the names of its
+#   contributors may be used to endorse or promote products derived from
+#   this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#*
+#* File			:	check_site
+#*
+#* Description	:	script to a given web site
+#*
+#* Author		:	Luc Suryo <luc@basassops.com>
+#*
+#* Version		:	0.2
+#*
+#* Date			:	Jul 4, 2023
+#*
+#* History	:
+#*		Date:			Author:		Info:
+#*		Jun 25, 2016	LIS			First Release
+#*		Jul 4, 2023		LIS			added options IPv6 and http1.1, http2 and http3
+#*
+
+_program="${0##*/}"
+_author='Luc Suryo'
+_copyright="Copyright 2016 - $(date "+%Y") (c) badassops LLC"
+_license='License BSD, http://www.freebsd.org/copyright/freebsd-license.html'
+_version='0.2'
+_email='luc@basassops.com'
+_summary='script to check a web site'
+_cancelled='OK : Process has been cancelled on your request.'
+_info="$_program $_version\n$_copyright\n$_license\n\nWritten by $_author <$_email>\n$_summary\n"
+
+# defined return values
+_state_ok=0 ; _state_ok_msg='OK'
+_state_critical=2 ; _state_critical_msg='CRITICAL'
+
+# Whatever script needs to be run as root and exclusive lock
+_need_lock=1
+
+# color :)
+# Reset
+_color_off='\033[0m'		# Text Reset
+
+# Bold
+_color_black='\033[1;30m'	# Black
+_color_red='\033[1;31m'		# Red
+_color_green='\033[1;32m'	# Green
+_color_yellow='\033[1;33m'	# Yellow
+_color_blue='\033[1;34m'	# Blue
+_color_purple='\033[1;35m'	# Purple
+_color_cyan='\033[1;36m'	# Cyan
+_color_white='\033[1;37m'	# White
+
+# working variables
+_opid=$$
+_work_dir=/tmp/"$_program"
+_tmp_file="$_work_dir"/"$_program"-"$_opid".lock
+_lockfile="$_work_dir"/"$_program".LOCK
+_send_alert="false"
+_echo_flag='-e'
+_my_website=
+_my_timeout=5
+_my_count=1
+#
+_my_prot="https"
+_valid_prot="http https"
+_my_http_prot="1.1"
+_valid_http_prot="1.1 2 3"
+_my_ip_prot="ipv4"
+_valid_ip_prot="ipv4 ipv6"
+_my_compression="false"
+_my_quiet="false"
+#
+_curl_flags="-sk"
+
+# mail variables
+_email_to='your-email-address-here'
+_email_from='your-email-address-here'
+_email_subject='Check_IPv6'
+_email_msg=
+_email_file="$_work_dir"/"$_program".mail
+
+# Set interrupt handler
+trap inthandler 1 2 3 4 5 9 10 12 15 23 24 25
+
+function inthandler() {
+	kill -TERM $_spid
+	clean_up
+	_print_it warning "$_cancelled"
+	exit $_state_ok
+}
+
+function clean_up() {
+	rm -f "$_tmp_file" "$_lockfile" "$_email_file" > /dev/null 2>&1
+	return 0
+}
+
+function counter() {
+	local delay=0.75
+	local spincnt=$1
+	_checkMark="\e[0;32m\xE2\x9C\x94\e[0m"
+	while [ 1 ]; do
+		printf "\e[s"
+		printf "  \e[1;35m[%s]${_checkMark}" "$spincnt"
+		sleep $delay
+		let spincnt--
+		if (( $spincnt < 0 )) ; then
+			break
+		fi
+		printf "\e[u\e[0K"
+	done
+	printf "\e[u\e[0K"
+}
+
+function _print_it() {
+	local _info_mode=$1
+	shift
+	case $_info_mode
+	in
+		# argument given none color
+		ok)			printf "${_color_green}%s${_color_off}\n" "$*" 2>&1 ;;
+		warning)	printf "${_color_yellow}%s${_color_off}\n" "$*" 2>&1 ;;
+		error)		printf "${_color_red}%s${_color_off}\n" "$*" 2>&1 ;;
+		Help)		printf "${_color_yellow}" ; echo -e "$*" ; printf "${_color_off}" 2>&1 ;;
+		help)		printf "${_color_cyan}" ; echo -e "$*" ; printf "${_color_off}" 2>&1 ;;
+		ignore)		printf "${_color_purple}" ; echo -e "$*" ; printf "${_color_off}" 2>&1 ;;
+		# no new line and no color
+		entry)		echo -en "$*" 2>&1 ;;
+		# reset screen
+		reset)		printf "${_color_off}\n" 2>&1 ;;
+		# default
+		*)			printf "${_color_cyan}%s${_color_off}\n" "$*" 2>&1 ;;
+	esac
+	return 0
+}
+
+function help() {
+	trap 1 2 3 4 5 9 10 12 15 23 24 25
+	clean_up
+	_print_it Help "$_info"
+	_print_it help "Usage : $_program [-h] [ option ... ]"
+	_print_it help " Options:"
+	_print_it help " --site sitename    site to check, require, default to ${_my_website:-no default}"
+	_print_it help " --protocol value   valid : $_valid_prot, default to ${_my_prot:-no default}"
+	_print_it help " --http value       valid : $_valid_http_prot, default to ${_my_http_prot:-no default}"
+	_print_it help " --ipv value        valid : $_valid_ip_prot, default to ${_my_ip_prot:-no default}"
+	_print_it help " --count value      loop th check count times, default: ${_my_count:-no default}."
+	_print_it help " --timeout value    timeout in seconds, default to ${_my_timeout:-no default}"
+	_print_it help " --zip              use compression; default: ${_my_compression:-no default}."
+	_print_it help " --quiet            quiet mode, default: ${_my_quiet:-no default}."
+	_print_it help " -v Show version."
+	_print_it help " -h Show this page."
+	_print_it help "Notes: for http3, teh curl most be compile supporting http3"
+	clean_up
+	exit $1
+}
+
+function send_mail() {
+	local _result=0
+	local _cur_time=$(date "+%H:%M %Y-%m-%d")
+
+	_email_msg="Unable to connect to $_my_website"
+
+	echo $_echo_flag "From: $_email_to"                             > $_email_file
+	echo $_echo_flag "To: $_email_from"                             >> $_email_file
+	echo $_echo_flag "Subject: $_email_subject"                     >> $_email_file
+	echo $_echo_flag "Content-Type: text/plain; charset=us-ascii"   >> $_email_file
+	echo $_echo_flag "Content-Transfer-Encoding: 7bit\n\n"          >> $_email_file
+	echo $_echo_flag "$_cur_time:\n\t$_email_msg"                   >> $_email_file
+	[[ -f $_result_file ]] && cat $_result_file                     >> $_email_file
+	echo $_echo_flag "\n\n----------------------"                   >> $_email_file
+	echo $_echo_flag "Operations Team"                              >> $_email_file
+	/usr/sbin/sendmail -t < $_email_file
+	_result=$(( $? + $_result ))
+	rm -f $_email_file
+	return $_result
+}
+
+function create_info_file() {
+	echo "\\n    time_namelookup:  %{time_namelookup}\\n"     	> $_tmp_file
+	echo "       time_connect:  %{time_connect}\\n"         	>> $_tmp_file
+	echo "    time_appconnect:  %{time_appconnect}\\n"      	>> $_tmp_file
+	echo "   time_pretransfer:  %{time_pretransfer}\\n"     	>> $_tmp_file
+	echo "      time_redirect:  %{time_redirect}\\n"        	>> $_tmp_file
+	echo " time_starttransfer:  %{time_starttransfer}\\n"   	>> $_tmp_file
+	echo "                    ----------\\n"                	>> $_tmp_file
+	echo "         time_total:  %{time_total} return code %{http_code}\\n"	>> $_tmp_file
+	echo "      url_effective:  %{url_effective} speed_download: %{speed_download}\\n" >>  $_tmp_file
+	echo "      num_connects:   %{num_connects}  num_redirects: %{num_redirects}\\n" >>  $_tmp_file
+	echo "     download size:   %{size_download}\\n" >>  $_tmp_file
+	return $?
+}
+
+function get_given_options() {
+	local _option_website=0	; local _option_proto=0
+	local _option_http=0	; local _option_ip=0
+	local _option_count=0	; local _option_timeout=0
+	local _has_error=0
+	while [[ -n "$1" ]]
+	do
+		case "$1" in
+			'--site'|'-s')		_my_website="$2"	; shift ; let _option_website++ ;;
+
+			'--proto'|'-p')		_my_protocol="$2"	; shift ; let _option_proto++
+								case $_my_protocol
+								in
+									http)	_my_protocol="http" ;;
+									https)	_my_protocol="https" ;;
+									*)	 _print_it error "Given http protocol $_my_protocol, is not supported"
+										let _has_error++
+										;;
+								esac
+								;;
+
+			'--http'|'-H')		_my_http_prot=$2	; shift ; let _option_http++ 
+								case $_my_http_prot
+								in
+									1.1)	_curl_flags="$_curl_flags --http1.1" ;;
+									2)		_curl_flags="$_curl_flags --http2" ;;
+									3)		_curl_flags="$_curl_flags --http3" ;;
+									*)	 _print_it error "Given http version $_my_http_prot, is not supported"
+										let _has_error++
+										;;
+								esac
+								;;
+
+			'--ipv'|'-i')		_my_ip_prot=$2		; shift ; let _option_ip++
+								case $_my_ip_prot
+								in
+									ipv4)	_curl_flags="$_curl_flags --ipv4" ;;
+									ipv6)	_curl_flags="$_curl_flags --ipv6" ;;
+									*)	_print_it error "Given IP version $_my_ip_prot, is not supported"
+										let _has_error++
+										;;
+								esac
+								;;
+
+
+			'--count'|'-c')		_my_count="$2"		; shift ; let _option_count++ ;;
+			'--timeout'|'-t')	_my_timeout="$2"	; shift ; let _option_timeout++ ;;
+			'--zip'|'-z')		_curl_flags="$_curl_flags --compressed" ;;
+			'--quiet'|'-q')		_my_quiet=true ;;
+			'-version'|'-v')	echo $_echo_flag "$_version" ; exit $_state_ok ; ;;
+
+			*)	help 0 ;; # Which includes -h and --help
+		esac
+		shift
+	done
+
+	(( $_option_website != 1 )) && _print_it error "Mandatory --site option omitted or given more then once." && let _has_error++
+	(( $_option_proto > 1 )) && _print_it error "option --proto can only be given once." && let _has_error++
+	(( $_option_http > 1 )) && _print_it error "option --http can only be given once." && let _has_error++
+	(( $_option_ip > 1 )) && _print_it error "option --ipv can only be given once." && let _has_error++
+	(( $_option_count > 1 )) && _print_it error "option --count can only be given once." && let _has_error++
+	(( $_option_timeout > 1 )) && _print_it error "option --timeout can only be given once." && let _has_error++
+
+	(( $_has_error != 0 )) && help $_has_error
+	return 0
+}
+
+function send_alert() {
+	if [[ $_send_alert == "false"  ]] ; then
+		[[ $_my_quiet == "false" ]] && _print_it ignore "\t * Alerting was not requested *\n"
+		return 0
+	fi
+	if [[ "$_email_to" == "your-email-address-here" ]] ; then
+		_print_it ignore "\t * Email address has not been set, no email alert will be sent *\n"
+	else
+		send_mail
+	fi
+	if [[ ! -x /usr/local/sbin/send-to-slack ]] ; then
+		_print_it ignore "\t * No /usr/local/sbin/send-to-slack found *"
+		_print_it ignore "\t * Get it from https://github.com/my10c/send-to-slack-go *\n"
+	else
+		/usr/local/sbin/send-to-slack -m "failed to check $_my_protocol://$_my_website, option used $_curl_flags" -q
+	fi
+	return 0
+}
+
+function check_running() {
+	if [[ -f "$_lockfile" ]]; then
+		/bin/ps -p $(cat "$_lockfile") > /dev/null 2>&1
+		if (( $? == 0 )) ; then
+			_print_it warning "There is already a $_program running, execution has been terminated"
+			_print_it warning "If this is an error please remove the lock file: $_lockfile"
+			exit $_state_ok
+		else
+			_print_it warning "Lock file found and deleted since there is no process with that pid"
+			rm -rf "$_lockfile" > /dev/null 2>&1
+		fi
+	fi
+	if ! mkdir -p "$_work_dir" > /dev/null 2>&1;then
+		_print_it error "Unable to create file working directory $_work_dir"
+		exit $_state_unknown
+	fi
+	echo "$_opid" > "$_lockfile"
+	return 0
+}
+
+function check_it() {
+	if [[ $_my_quiet == "false" ]] ; then
+		create_info_file
+		(( $? != $_state_ok )) && return 1
+		_curl_flags="-w @$_tmp_file $_curl_flags"
+	fi
+
+	curl -o /dev/null $_curl_flags --connect-timeout $_my_timeout $_my_protocol://$_my_website >/dev/null 2>&1
+	if (( $? != 0 )) ; then
+		_print_it error "* site $_my_website does not exist or is not reachable, aborting... *"
+		return 255
+	fi
+
+	if [[ $_my_quiet == "false" ]] ; then
+		_print_it ignore "\tchecking $_my_protocol://$_my_website"
+		_print_it ignore "\tcurl flags used: $_curl_flags "
+	fi
+
+	local _cnt=1
+	while true
+	do
+		(( $_cnt > $_my_count )) && break
+		if [[ $_my_quiet == "false" ]] ; then
+			counter 5
+			_print_it reset
+			_print_it info "Counter : $_cnt"
+		fi
+		let _cnt++
+		curl -o /dev/null $_curl_flags --connect-timeout $_my_timeout $_my_protocol://$_my_website 
+		[[ $_my_quiet == "false" ]] &&  echo -ne "\n"
+	done
+	return 0
+}
+
+function main() {
+	local _var_exit=$_state_ok
+
+	get_given_options $@
+	(( $_need_lock == 1 )) && check_running
+
+	_print_it info "---" "$(date) Process starting"
+	check_it
+	_var_exit=$?
+
+	clean_up
+	trap 1 2 3 4 5 9 10 12 15 23 24 25
+	case $_var_exit
+	in
+		0)	_print_it info "Process completed, result == $_var_exit"
+			_print_it ok "---" "$(date) $_program $_state_ok_msg : succesful" ;;
+
+		*)	_print_it info "Process completed, result == $_var_exit"
+			_print_it error "---" "$(date) $_program $_state_critical_msg : has failed"
+			send_alert ;;
+	esac
+	exit $_var_exit
+}
+main $@

@@ -60,10 +60,6 @@ _info="$_program $_version\n$_copyright\n$_license\n\nWritten by $_author <$_ema
 _state_ok=0 ; _state_ok_msg='OK'
 _state_critical=2 ; _state_critical_msg='CRITICAL'
 
-# Whatever script needs to be run as root and exclusive lock
-_need_root=0
-_need_lock=1
-
 # color :)
 # Reset
 _color_off='\033[0m'		# Text Reset
@@ -210,6 +206,7 @@ function get_site_info(){
 	create_info_file
 	(( $? != $_state_ok )) && return 1
 
+	counter 5
 	curl $_curl_flags https://$_my_site --connect-timeout $_my_timeout $_compression_flag -o /dev/null 2>&1
 	if (( $? != 0 )) ; then
 		_print_it error "* site $_my_site does not exist or is not reachable, aborting... *"
@@ -227,6 +224,7 @@ function get_site_info(){
 
 function get_site_ocsp() {
 	local _result=0
+	counter 5
 	_print_it info "$_my_site : OCSP INFO"
 	echo QUIT | openssl s_client -connect ${_my_site}:443 -status 2>/dev/null | grep -A12 'OCSP Response Data:'
 	_result=$?

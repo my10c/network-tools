@@ -13,6 +13,9 @@ Script to check your IPv6 connection. handy to keep track if your IPv6 has chang
 ### check_ocsp
 Script to check if the given site has OCSP enabled
 
+### check_site
+Script to check a website with various options
+
 #### IDEA:
  let me know your request 👻  and I *might* add it 😎
 
