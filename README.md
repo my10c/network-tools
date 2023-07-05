@@ -16,6 +16,12 @@ Script to check if the given site has OCSP enabled
 ### check_site
 Script to check a website with various options
 
+### check_ssl_cipher
+Script to get the SSL cipher supported by the given website
+
+### check_ssl_protocol
+Script to check which SSL protocols is supported by the given website
+
 #### IDEA:
  let me know your request 👻  and I *might* add it 😎
 

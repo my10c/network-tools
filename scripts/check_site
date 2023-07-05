@@ -32,7 +32,7 @@
 #*
 #* File			:	check_site
 #*
-#* Description	:	script to a given web site
+#* Description	:	script to check a given web site
 #*
 #* Author		:	Luc Suryo <luc@basassops.com>
 #*
@@ -162,21 +162,20 @@ function _print_it() {
 
 function help() {
 	trap 1 2 3 4 5 9 10 12 15 23 24 25
-	clean_up
 	_print_it Help "$_info"
 	_print_it help "Usage : $_program [-h] [ option ... ]"
 	_print_it help " Options:"
-	_print_it help " --site sitename    site to check, require, default to ${_my_website:-no default}"
-	_print_it help " --protocol value   valid : $_valid_prot, default to ${_my_prot:-no default}"
-	_print_it help " --http value       valid : $_valid_http_prot, default to ${_my_http_prot:-no default}"
-	_print_it help " --ipv value        valid : $_valid_ip_prot, default to ${_my_ip_prot:-no default}"
-	_print_it help " --count value      loop th check count times, default: ${_my_count:-no default}."
-	_print_it help " --timeout value    timeout in seconds, default to ${_my_timeout:-no default}"
-	_print_it help " --zip              use compression; default: ${_my_compression:-no default}."
-	_print_it help " --quiet            quiet mode, default: ${_my_quiet:-no default}."
+	_print_it help " --(s)ite sitename   site to check, require, default to ${_my_website:-no default}"
+	_print_it help " --(p)rotocol value  valid : $_valid_prot, default to ${_my_prot:-no default}"
+	_print_it help " --(H)ttp value      valid : $_valid_http_prot, default to ${_my_http_prot:-no default}"
+	_print_it help " --(i)pv value       valid : $_valid_ip_prot, default to ${_my_ip_prot:-no default}"
+	_print_it help " --(c)ount value     loop th check count times, default: ${_my_count:-no default}."
+	_print_it help " --(t)imeout value   timeout in seconds, default to ${_my_timeout:-no default}"
+	_print_it help " --(z)ip             use compression; default: ${_my_compression:-no default}."
+	_print_it help " --(q)uiet           quiet mode, default: ${_my_quiet:-no default}."
 	_print_it help " -v Show version."
 	_print_it help " -h Show this page."
-	_print_it help "Notes: for http3, teh curl most be compile supporting http3"
+	_print_it help "Notes: for http3, the curl most be compile supporting http3"
 	clean_up
 	exit $1
 }
@@ -330,6 +329,7 @@ function check_it() {
 		_curl_flags="-w @$_tmp_file $_curl_flags"
 	fi
 
+	# make sure we can connect to the given website
 	curl -o /dev/null $_curl_flags --connect-timeout $_my_timeout $_my_protocol://$_my_website >/dev/null 2>&1
 	if (( $? != 0 )) ; then
 		_print_it error "* site $_my_website does not exist or is not reachable, aborting... *"

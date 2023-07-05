@@ -2,7 +2,7 @@
 #
 # BSD 3-Clause License
 #
-# Copyright (c) 2013 - 2023, © Badassops LLC / Luc Suryo
+# Copyright (c) 2014 - 2023, © Badassops LLC / Luc Suryo
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -30,30 +30,30 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #*
-#* File		:	check_ocsp
+#* File			:	check_ssl_cipher
 #*
-#* Description	: script to check if given site has OCSP support
+#* Description	:	script to check the supported ssl ciphers by given web site
 #*
-#* Author	:	Luc Suryo <luc@badassops.com>
+#* Author		:	Luc Suryo <luc@basassops.com>
 #*
-#* Version	:	0.2
+#* Version		:	0.2
 #*
-#* Date		:	Jul 4, 2023
+#* Date			:	Jul 4, 2023
 #*
 #* History	:
-#* 		Date:			Author:			Info:
-#*		Nov 16, 2013	LIS				First Release
-#*		Jul 4, 2023		LIS				make the output better
+#*		Date:			Author:		Info:
+#*		Oct 25, 2014	LIS			First Release
+#*		Jul 4, 2023		LIS			added options IPv6 and use nmap instead of openssl
 #*
-# https://www.digicert.com/help/
+#* mapping from : https://testssl.sh/openssl-iana.mapping.html
 
 _program="${0##*/}"
 _author='Luc Suryo'
-_copyright="Copyright 2013 - $(date "+%Y") (c) badassops LLC"
+_copyright="Copyright 2016 - $(date "+%Y") (c) badassops LLC"
 _license='License BSD, http://www.freebsd.org/copyright/freebsd-license.html'
-_version='0.1'
+_version='0.2'
 _email='luc@basassops.com'
-_summary='Script to check if given site has OCSP support'
+_summary='script to check the supported ssl ciphers by given web site'
 _cancelled='OK : Process has been cancelled on your request.'
 _info="$_program $_version\n$_copyright\n$_license\n\nWritten by $_author <$_email>\n$_summary\n"
 
@@ -77,17 +77,18 @@ _color_white='\033[1;37m'	# White
 
 # working variables
 _opid=$$
-_tmp_file=/tmp/$_opid
-_hostname="${HOSTNAME%%.*}"
 _echo_flag='-e'
-_echo_nflag='-ne'
-_my_site=
+_my_website=
 _my_timeout=10
+#
+_ipVersion="IPv4"
+_my_ip_prot="ipv4"
+_valid_ip_prot="ipv4 ipv6"
 _my_compression="false"
-_compression_flag=
-
-# commands used
-_curl_flags="-sk"
+_my_quiet="false"
+#
+_curl_flags="-sk --connect-timeout $_my_timeout" 
+_nmap_flags="--script ssl-enum-ciphers -p 443"
 
 # Set interrupt handler
 trap inthandler 1 2 3 4 5 9 10 12 15 23 24 25
@@ -100,20 +101,21 @@ function inthandler() {
 }
 
 function clean_up() {
-	rm -f "$_tmp_file" > /dev/null 2>&1
+	rm -f "$_tmp_file" "$_lockfile" "$_email_file" > /dev/null 2>&1
 	return 0
 }
 
 function counter() {
 	local delay=0.75
 	local spincnt=$1
+	local _cnt=1
 	_checkMark="\e[0;32m\xE2\x9C\x94\e[0m"
 	while [ 1 ]; do
 		printf "\e[s"
-		printf "  \e[1;35m[%s]${_checkMark}" "$spincnt"
+		printf " \e[1;35m[%s]${_checkMark}" "$_cnt"
 		sleep $delay
-		let spincnt--
-		if (( $spincnt < 0 )) ; then
+		let _cnt++
+		if (( $_cnt == $spincnt )) ; then
 			break
 		fi
 		printf "\e[u\e[0K"
@@ -138,7 +140,7 @@ function _print_it() {
 		# reset screen
 		reset)		printf "${_color_off}\n" 2>&1 ;;
 		# default
-		*)			printf "${_color_cyan}" ; echo -e "$*" ; printf "${_color_off}" 2>&1 ;;
+		*)			printf "${_color_cyan}%s${_color_off}\n" "$*" 2>&1 ;;
 	esac
 	return 0
 }
@@ -146,114 +148,94 @@ function _print_it() {
 function help() {
 	trap 1 2 3 4 5 9 10 12 15 23 24 25
 	_print_it Help "$_info"
-	_print_it help "Usage : $_program [-h]  [ option ... ]"
+	_print_it help "Usage : $_program [-h] [ option ... ]"
 	_print_it help " Options:"
-	_print_it help "   -h                  this help page."
-	_print_it help "  --(s)ite sitename    Specify the site to check."
-	_print_it help "  --(t)imeout seconds  Specify the timeout. Default: ${_my_timeout:-no default}" 
-	_print_it help "  --(z)ip              request compression; default: ${_my_compression:-no default}."
-	_print_it help "   -v                  Show version."
+	_print_it help " --(s)ite sitename    site to check, require, default to ${_my_website:-no default}"
+	_print_it help " --(i)pv value        valid : $_valid_ip_prot, default to ${_my_ip_prot:-no default}"
+	_print_it help " --(t)imeout value    timeout in seconds, default to ${_my_timeout:-no default}"
+	_print_it help " -v Show version."
+	_print_it help " -h Show this page."
+	_print_it ignore "Notes: the ciphers are the IANA names, use the mapping file for the Openssl names."
+	_print_it ignore "       Only TLSv1.2 and above are displayed."
 	clean_up
 	exit $1
 }
 
-function create_info_file() {
-	echo "\\n    time_namelookup:  %{time_namelookup}\\n"     	> $_tmp_file
-	echo "       time_connect:  %{time_connect}\\n"         	>> $_tmp_file
-	echo "    time_appconnect:  %{time_appconnect}\\n"      	>> $_tmp_file
-	echo "   time_pretransfer:  %{time_pretransfer}\\n"     	>> $_tmp_file
-	echo "      time_redirect:  %{time_redirect}\\n"        	>> $_tmp_file
-	echo " time_starttransfer:  %{time_starttransfer}\\n"   	>> $_tmp_file
-	echo "                    ----------\\n"                	>> $_tmp_file
-	echo "         time_total:  %{time_total} return code %{http_code}\\n"	>> $_tmp_file
-	echo "      url_effective:  %{url_effective} speed_download: %{speed_download}\\n" >>  $_tmp_file
-	echo "      num_connects:   %{num_connects}  num_redirects: %{num_redirects}\\n" >>  $_tmp_file
-	echo "     download size:   %{size_download}\\n" >>  $_tmp_file
-	return $?
-}
-
 function get_given_options() {
-	local _option_site=0 ;
-	local _option_timeout=0
-	local _option_compression=0
-	local _has_error=0
+	local _option_website=0	; local _option_ip=0 ; local _option_timeout=0 local _has_error=0
 	while [[ -n "$1" ]]
 	do
 		case "$1" in
-			 '--site'|'-s')		_my_site="$2"
-								shift ; let _option_site++ ;;
+			'--site'|'-s')		_my_website="$2"	; shift ; let _option_website++ ;;
 
-			 '--timeout'|'-t')	_my_timeout="$2"
-								shift ; let _option_timeout++ ;;
+			'--ipv'|'-i')		_my_ip_prot=$2		; shift ; let _option_ip++
+								case $_my_ip_prot
+								in
+									ipv4)	_curl_flags="$_curl_flags --ipv4"
+											_nmap_flags="$_nmap_flags -4" ;;
+									ipv6)	_curl_flags="$_curl_flags --ipv6"
+											_nmap_flags="$_nmap_flags -6"
+											_ipVersion="IPv6" ;;
+									*)	_print_it error "Given IP version $_my_ip_prot, is not supported"
+										let _has_error++
+										;;
+								esac
+								;;
 
-			'--zip'|'-z')		_compression_flag="--compressed"
-								let _option_compression++ 
-								_my_compression="true" ;;
 
-			'--version'|'-v')	echo $_echo_flag "$_version" ; exit $_state_ok ; ;;
-			*)		help 0 ;; 	# Which includes -h and --help
+			'--timeout'|'-t')	_my_timeout="$2"	; shift ; let _option_timeout++ ;;
+			'-version'|'-v')	echo $_echo_flag "$_version" ; exit $_state_ok ; ;;
+
+			*)	help 0 ;; # Which includes -h and --help
 		esac
 		shift
 	done
 
-	(( $_option_site != 1 )) && _print_it error "-s is missing or given more then once." && let _has_error++
-	(( $_option_timeout > 1 )) && _print_it error "-t can only be given once." && let _has_error++
-	(( $_option_compression > 1 )) && _print_it error "-z can only be given once." && let _has_error++
+	(( $_option_website != 1 )) && _print_it error "Mandatory --site option omitted or given more then once." && let _has_error++
+	(( $_option_ip > 1 )) && _print_it error "option --ipv can only be given once." && let _has_error++
+	(( $_option_timeout > 1 )) && _print_it error "option --timeout can only be given once." && let _has_error++
+
 	(( $_has_error != 0 )) && help $_has_error
 	return 0
 }
 
-function get_site_info(){
-	local _result=0
-	create_info_file
-	(( $? != $_state_ok )) && return 1
+function check_it() {
 
-	counter 5
 	# make sure we can connect to the given website
-	curl $_curl_flags https://$_my_site --connect-timeout $_my_timeout $_compression_flag -o /dev/null 2>&1
+	curl -o /dev/null $_curl_flags https://$_my_website >/dev/null 2>&1
 	if (( $? != 0 )) ; then
-		_print_it error "* site $_my_site does not exist or is not reachable, aborting... *"
+		_print_it error "* site $_my_website does not exist or is not reachable on $_ipVersion, aborting... *"
 		return 255
 	fi
 
-	_print_it info "$_my_site : https connection INFO"
-	curl $_curl_flags --connect-timeout $_my_timeout $_compression_flag -w "@$_tmp_file" \
-		https://$_my_site \
-		-o /dev/null 2>&1
-	_result=$?
-	_print_it info "\t---\n\n"
-	return $_result
-}
+	_print_it ignore "\tchecking supported ciphers of https://$_my_website ($_ipVersion)"
+	echo -en "\n${_color_cyan}Connection time in second :${_color_off}"
+	counter $_my_timeout &
+	_pid=$!
 
-function get_site_ocsp() {
-	local _result=0
-	counter 5
-	_print_it info "$_my_site : OCSP INFO"
-	echo QUIT | openssl s_client -connect ${_my_site}:443 -status 2>/dev/null | grep -A12 'OCSP Response Data:'
-	_result=$?
-	if (( $_result != 0 )) ; then
-		# lets try to grep for OCSP in case thing has changed
-		echo QUIT | openssl s_client -connect ${_my_site}:443 -status 2>/dev/null | grep 'OCSP response: no response sent'
-		if (( $? == 0 )) ; then
-			_print_it warning "Site ${_my_site} does seem to support OCSP"
-			local _result=255
-		fi
-	fi
-	_print_it info "\t---\n\n"
-	return $_result
+	# we only want TLSv1.2 and higher
+	nmap $_nmap_flags $_my_website | awk '/TLSv1.2/,0'		|\
+		sed -e "s/^|_//g; s/^|//g; s/.*TLSv/\n\nTLSv/g;"	|\
+		grep -v "done"
+	kill -9 $_pid
+	_print_it ignore "\n---\n"
+	_print_it help "The ciphers are the IANA names, use the mapping file for the Openssl names."
+	_print_it help "Only TLSv1.2 and above are displayed."
+	_print_it ignore "\n---\n"
+	return 0
 }
 
 function main() {
 	local _var_exit=$_state_ok
-	get_given_options $@
-	_print_it info "---" "$(date) Process starting"
-	get_site_info
-	_var_exit=$?
-	if (( $_var_exit == 0 )); then
-		get_site_ocsp
-		_var_exit=$?
-	fi
 
+	get_given_options $@
+
+	_print_it info "---" "$(date) Process starting"
+	check_it
+	_var_exit=$?
+
+	clean_up
+	trap 1 2 3 4 5 9 10 12 15 23 24 25
 	case $_var_exit
 	in
 		0)	_print_it info "Process completed, result == $_var_exit"
@@ -262,8 +244,6 @@ function main() {
 		*)	_print_it info "Process completed, result == $_var_exit"
 			_print_it error "---" "$(date) $_program $_state_critical_msg : has failed" ;;
 	esac
-	clean_up
-	trap 1 2 3 4 5 9 10 12 15 23 24 25
 	exit $_var_exit
 }
-main "$@"
+main $@

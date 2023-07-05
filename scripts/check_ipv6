@@ -161,16 +161,14 @@ function _print_it() {
 
 function help() {
 	trap 1 2 3 4 5 9 10 12 15 23 24 25
-	clean_up
 	_print_it Help "$_info"
 	_print_it help "Usage : $_program [-h] [ option ... ]"
 	_print_it help " Options:"
-	_print_it help " -(s)ite    sitename  optional, default to ${_my_websites:-no default}"
-	_print_it help " -(H)eader  value     required if not using the default site, default to ${_my_header:-no default}"
-	_print_it help " -(t)imeout value     optional, timeout in seconds, default to ${_my_timeout:-no default}"
+	_print_it help " --(s)ite   value   optional, default to ${_my_websites:-no default}"
+	_print_it help " --(H)eader value   required if not using the default site, default to ${_my_header:-no default}"
+	_print_it help " --(t)imeout value  optional, timeout in seconds, default to ${_my_timeout:-no default}"
 	_print_it help " -v Show version."
 	_print_it help " -h Show this page."
-	_print_it help "Notes:"
 	clean_up
 	exit $1
 }
