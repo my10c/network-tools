@@ -96,6 +96,7 @@ _my_ip_prot="ipv4"
 _valid_ip_prot="ipv4 ipv6"
 _my_compression="false"
 _my_quiet="false"
+_my_protocol="https"
 #
 _curl_flags="-sk"
 
